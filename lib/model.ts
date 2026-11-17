@@ -357,10 +357,12 @@ export function buildBoard(snapshot: Snapshot, model: ModelConstants = MODEL): B
     age_days: s.age,
     implied_value_usd: s.implied,
     model: {
-      category_multiple: round4(s.categoryMultiple),
+      // Full precision, not rounded: the dashboard recomputes the row from these same factors, and
+      // a rounded multiple would make its recomputation differ from the board by a few dollars.
+      category_multiple: s.categoryMultiple,
       growth_pct: s.growthPct,
-      growth_multiplier: round4(s.growthMult),
-      age_multiplier: round4(s.ageMult),
+      growth_multiplier: s.growthMult,
+      age_multiplier: s.ageMult,
       age_days: s.age,
     },
     farm_steps: farmSteps(s.p, s.age).map(stepText),
