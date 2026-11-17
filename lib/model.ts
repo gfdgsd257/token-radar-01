@@ -371,81 +371,93 @@ export function buildBoard(snapshot: Snapshot, model: ModelConstants = MODEL): B
 
 const round4 = (n: number): number => Math.round(n * 1e4) / 1e4;
 
-/** A step as one string: its action, then its cost and time, within the gate's 20..600 characters. */
-export function stepText(step: FarmStep): string {
-  let s = `${step.text} Cost: ${step.cost}. Time: ${step.time}.`;
-  if (s.length > 600) s = `${s.slice(0, 596)}...`;
-  if (s.length < 20) s = `${s} Hold the position and check the protocol's own page.`;
-  return s;
+// One farm step as a single string: the action, then its cost and time.
+export function stepText(oneStep: FarmStep): string {
+  const joined = oneStep.text + ' Cost: ' + oneStep.cost + '. Time: ' + oneStep.time + '.';
+  const trimmed = joined.length > 600 ? joined.slice(0, 596) + '...' : joined;
+  const padded = trimmed.length < 20 ? trimmed + " Hold the position and check the protocol's own page." : trimmed;
+  return padded;
 }
 
-/** The first chain a protocol names, or a neutral phrase. */
-function chainOf(p: SnapshotProtocol): string {
-  return p.chains.length > 0 ? p.chains[0]! : 'its main chain';
+// The chain a farm plan talks about: the protocol's first, or a neutral phrase.
+function chainOf(protocol: SnapshotProtocol): string {
+  const first = protocol.chains.at(0);
+  return first === undefined ? 'its main chain' : first;
 }
 
-/**
- * What one transaction costs on a protocol's first chain, as a stated estimate: Ethereum mainnet gas
- * runs about $8 a transaction, other chains about $1. It is a plan assumption, not a snapshot figure.
- */
-function gasFor(p: SnapshotProtocol): number {
-  const chain = p.chains.length > 0 ? p.chains[0]! : '';
-  if (chain === 'Ethereum') return 8;
-  if (chain === '') return 2;
-  return 1;
+// What one transaction costs on a protocol's first chain, as a stated
+// estimate: Ethereum mainnet gas runs about $8 a transaction, other
+// chains about $1, and a protocol naming no chain at all is charged
+// $2. A plan assumption, not a snapshot figure.
+function gasFor(protocol: SnapshotProtocol): number {
+  const first = protocol.chains.at(0);
+  const table: Record<string, number> = { Ethereum: 8 };
+  return first === undefined ? 2 : (table[first] ?? 1);
 }
 
-/** How much capital one farm position needs, from the protocol's own TVL. */
-function capitalFor(p: SnapshotProtocol): number {
-  if (p.tvl_usd >= 5_000_000_000) return 250;
-  if (p.tvl_usd >= 1_000_000_000) return 150;
-  if (p.tvl_usd >= 100_000_000) return 100;
-  return 50;
+// How much capital one farm position needs, sized from the protocol's own TVL.
+function capitalFor(protocol: SnapshotProtocol): number {
+  const capitalBands: Array<[number, number]> = [
+    [5_000_000_000, 250],
+    [1_000_000_000, 150],
+    [100_000_000, 100],
+  ];
+  const hit = capitalBands.find(([floor]) => protocol.tvl_usd >= floor);
+  return hit === undefined ? 50 : hit[1];
 }
 
-/** How long to hold, from the protocol's age: younger protocols get a longer qualifying window. */
-function holdDaysFor(age: number | null): number {
-  if (age === null) return 30;
-  if (age < 180) return 60;
-  if (age < 365) return 45;
-  return 30;
+// How long to hold, from the protocol's age: the younger it is, the longer the qualifying window.
+function holdDaysFor(listedAge: number | null): number {
+  const days = listedAge === null ? 365 : listedAge;
+  const holdBands: Array<[number, number]> = [
+    [180, 60],
+    [365, 45],
+  ];
+  const hit = holdBands.find(([limit]) => days < limit);
+  return hit === undefined ? 30 : hit[1];
 }
 
-/** The category's main action, in the words a farmer can follow. */
-function actionFor(p: SnapshotProtocol, capital: number, chain: string): string {
-  const c = (p.category ?? '').toLowerCase();
-  const name = p.name;
-  if (c.includes('lend') || c.includes('cdp') || c.includes('collateral')) return `Supply $${capital} of USDC to ${name} on ${chain} and keep the supply open.`;
-  if (c.includes('dex') || c.includes('yield') || c.includes('leveraged farm')) return `Provide $${capital} of liquidity to ${name}'s main pool on ${chain} and keep the position open.`;
-  if (c.includes('bridge')) return `Bridge $${capital} of USDC to ${chain} through ${name} and use the bridged funds in its app.`;
-  if (c.includes('staking') || c.includes('restak')) return `Stake $${capital} of the chain's staking asset through ${name} and keep the receipt.`;
-  if (c.includes('perpetual') || c.includes('derivative') || c.includes('options')) return `Deposit $${capital} of USDC as margin on ${name} and open one small hedge.`;
-  if (c.includes('prediction')) return `Fund $${capital} and place one market position on ${name}.`;
-  if (c.includes('curator') || c.includes('allocator') || c.includes('basis trading')) return `Deposit $${capital} into a ${name} vault on ${chain} and keep the shares.`;
-  if (c.includes('stable')) return `Mint or deposit $${capital} of the stable asset through ${name} on ${chain}.`;
-  if (c.includes('rwa')) return `Mint $${capital} of the protocol's yield asset on ${chain} and hold it.`;
-  if (c.includes('insurance')) return `Buy $${capital} of cover from ${name} on ${chain} and keep the policy.`;
-  if (c.includes('launchpad')) return `Stake $${capital} of USDC in ${name}'s launch pool on ${chain} and join one sale.`;
-  if (c.includes('index')) return `Buy $${capital} of ${name}'s index token on ${chain} and hold it.`;
-  if (c.includes('token locker')) return `Lock $${capital} of tokens in ${name} on ${chain} and keep the lock receipt.`;
-  if (c.includes('liquidity manager')) return `Deposit $${capital} into a ${name} managed position on ${chain} and keep the shares.`;
-  if (c.includes('farm')) return `Deposit $${capital} of USDC into ${name}'s farm on ${chain} and keep the position open.`;
-  if (c.includes('governance')) return `Deposit $${capital} of USDC into ${name} on ${chain} and vote once with the position.`;
-  if (c.includes('chain')) return `Bridge $${capital} of USDC to ${chain} through its official bridge and use it in one app.`;
-  return `Deposit $${capital} of USDC into ${name} on ${chain} and keep the position open.`;
+// Whether `text` holds any of `needles`, compared case-insensitively.
+function hasAny(text: string, needles: readonly string[]): boolean {
+  const folded = text.toLowerCase();
+  return needles.some((needle) => folded.includes(needle));
 }
 
-/** A second qualifying touchpoint, so the wallet shows more than one transaction. */
-function secondActionFor(p: SnapshotProtocol, chain: string): string {
-  const c = (p.category ?? '').toLowerCase();
-  const name = p.name;
-  if (c.includes('lend') || c.includes('cdp') || c.includes('collateral')) return `Borrow $10 of USDC against the supply, then repay it the same week, so the wallet shows both sides of the market.`;
-  if (c.includes('dex') || c.includes('yield') || c.includes('leveraged farm')) return `Swap $10 through ${name}'s main pool on ${chain}, so the wallet shows a trade as well as liquidity.`;
-  if (c.includes('perpetual') || c.includes('derivative') || c.includes('options')) return `Close the hedge and open one more small position, so the wallet shows more than a single deposit.`;
-  if (c.includes('staking') || c.includes('restak')) return `Claim the staking rewards once and restake them, so the wallet shows a second action.`;
-  if (c.includes('curator') || c.includes('allocator') || c.includes('basis trading')) return `Move $10 between two ${name} vaults, so the wallet shows activity in more than one vault.`;
-  if (c.includes('bridge')) return `Bridge $10 back the other way, so the wallet shows use in both directions.`;
-  return `Do one more qualifying action, such as a swap, a vote or a second deposit, so the wallet shows more than a single transaction.`;
+// The category's main action, phrased so a farmer can follow it.
+function actionFor(p: SnapshotProtocol, funds: number, chain: string): string {
+  const lowered = (p.category ?? '').toLowerCase();
+  const protocolName = p.name;
+  if (hasAny(lowered, ['lend', 'cdp', 'collateral'])) return 'Supply $' + funds + ' of USDC to ' + protocolName + ' on ' + chain + ' and keep the supply open.';
+  if (hasAny(lowered, ['dex', 'yield', 'leveraged farm'])) return 'Provide $' + funds + ' of liquidity to ' + protocolName + "'s main pool on " + chain + ' and keep the position open.';
+  if (hasAny(lowered, ['bridge'])) return 'Bridge $' + funds + ' of USDC to ' + chain + ' through ' + protocolName + ' and use the bridged funds in its app.';
+  if (hasAny(lowered, ['staking', 'restak'])) return 'Stake $' + funds + " of the chain's staking asset through " + protocolName + ' and keep the receipt.';
+  if (hasAny(lowered, ['perpetual', 'derivative', 'options'])) return 'Deposit $' + funds + ' of USDC as margin on ' + protocolName + ' and open one small hedge.';
+  if (hasAny(lowered, ['prediction'])) return 'Fund $' + funds + ' and place one market position on ' + protocolName + '.';
+  if (hasAny(lowered, ['curator', 'allocator', 'basis trading'])) return 'Deposit $' + funds + ' into a ' + protocolName + ' vault on ' + chain + ' and keep the shares.';
+  if (hasAny(lowered, ['stable'])) return 'Mint or deposit $' + funds + ' of the stable asset through ' + protocolName + ' on ' + chain + '.';
+  if (hasAny(lowered, ['rwa'])) return 'Mint $' + funds + " of the protocol's yield asset on " + chain + ' and hold it.';
+  if (hasAny(lowered, ['insurance'])) return 'Buy $' + funds + ' of cover from ' + protocolName + ' on ' + chain + ' and keep the policy.';
+  if (hasAny(lowered, ['launchpad'])) return 'Stake $' + funds + ' of USDC in ' + protocolName + "'s launch pool on " + chain + ' and join one sale.';
+  if (hasAny(lowered, ['index'])) return 'Buy $' + funds + ' of ' + protocolName + "'s index token on " + chain + ' and hold it.';
+  if (hasAny(lowered, ['token locker'])) return 'Lock $' + funds + ' of tokens in ' + protocolName + ' on ' + chain + ' and keep the lock receipt.';
+  if (hasAny(lowered, ['liquidity manager'])) return 'Deposit $' + funds + ' into a ' + protocolName + ' managed position on ' + chain + ' and keep the shares.';
+  if (hasAny(lowered, ['farm'])) return 'Deposit $' + funds + ' of USDC into ' + protocolName + "'s farm on " + chain + ' and keep the position open.';
+  if (hasAny(lowered, ['governance'])) return 'Deposit $' + funds + ' of USDC into ' + protocolName + ' on ' + chain + ' and vote once with the position.';
+  if (hasAny(lowered, ['chain'])) return 'Bridge $' + funds + ' of USDC to ' + chain + ' through its official bridge and use it in one app.';
+  return 'Deposit $' + funds + ' of USDC into ' + protocolName + ' on ' + chain + ' and keep the position open.';
+}
+
+// A second qualifying touchpoint, so the wallet shows more than a single transaction.
+function secondActionFor(protocol: SnapshotProtocol, chain: string): string {
+  const lowered = (protocol.category ?? '').toLowerCase();
+  const protocolName = protocol.name;
+  if (hasAny(lowered, ['lend', 'cdp', 'collateral'])) return 'Borrow $10 of USDC against the supply, then repay it the same week, so the wallet shows both sides of the market.';
+  if (hasAny(lowered, ['dex', 'yield', 'leveraged farm'])) return 'Swap $10 through ' + protocolName + "'s main pool on " + chain + ', so the wallet shows a trade as well as liquidity.';
+  if (hasAny(lowered, ['perpetual', 'derivative', 'options'])) return 'Close the hedge and open one more small position, so the wallet shows more than a single deposit.';
+  if (hasAny(lowered, ['staking', 'restak'])) return 'Claim the staking rewards once and restake them, so the wallet shows a second action.';
+  if (hasAny(lowered, ['curator', 'allocator', 'basis trading'])) return 'Move $10 between two ' + protocolName + ' vaults, so the wallet shows activity in more than one vault.';
+  if (hasAny(lowered, ['bridge'])) return 'Bridge $10 back the other way, so the wallet shows use in both directions.';
+  return 'Do one more qualifying action, such as a swap, a vote or a second deposit, so the wallet shows more than a single transaction.';
 }
 
 /**
@@ -636,6 +648,47 @@ export function boardIssue(board: BoardRow[], snapshot: Snapshot): string | null
     if (!Number.isSafeInteger(r.implied_value_usd) || r.implied_value_usd <= 0) return `${r.slug} has implied value ${r.implied_value_usd}`;
   }
   return null;
+}
+
+// Extra invariants the --strict flag enforces on top of boardIssue:
+// every figure the dashboard recomputes must sit inside the model's
+// own bands, and every row must carry the shape the gate expects.
+// These never fire on a board buildRadar produces; they exist to
+// catch a future model change that quietly breaks the page's math.
+export function strictBoardChecks(board: BoardRow[], snapshot: Snapshot): string | null {
+  const seen = new Set<string>();
+  for (let i = 0; i < board.length; i++) {
+    const row = board[i]!;
+    if (row.rank !== i + 1) return 'row ' + (i + 1) + ' carries rank ' + row.rank;
+    if (seen.has(row.slug)) return 'slug ' + row.slug + ' appears twice on the board';
+    seen.add(row.slug);
+    if (row.token_status !== 'pre-token') return row.slug + ' is not marked pre-token';
+    if (!Number.isSafeInteger(row.implied_value_usd) || row.implied_value_usd <= 0) {
+      return row.slug + ' has implied value ' + row.implied_value_usd;
+    }
+    const m = row.model;
+    if (m.category_multiple < 0.05 || m.category_multiple > 0.8) {
+      return row.slug + ' has category multiple ' + m.category_multiple;
+    }
+    if (m.growth_multiplier < 0.7 || m.growth_multiplier > 1.6) {
+      return row.slug + ' has growth multiplier ' + m.growth_multiplier;
+    }
+    if (m.age_multiplier < 0.59 || m.age_multiplier > 1) {
+      return row.slug + ' has age multiplier ' + m.age_multiplier;
+    }
+    if (m.age_days !== row.age_days) return row.slug + ' disagrees with itself on age';
+    if (!Array.isArray(row.chains)) return row.slug + ' has no chains list';
+    if (row.farm_steps.length < 3 || row.farm_steps.length > 12) {
+      return row.slug + ' has ' + row.farm_steps.length + ' farm steps';
+    }
+    for (const step of row.farm_steps) {
+      if (step.length < 20 || step.length > 600) {
+        return row.slug + ' has a farm step of ' + step.length + ' characters';
+      }
+    }
+  }
+  const absent = snapshot.watchlist.filter((slug) => seen.has(slug) === false);
+  return absent.length === 0 ? null : 'the board misses watchlist slug ' + absent[0];
 }
 
 /** A compact data.js: the dashboard's whole dataset as one script, no fetch and no network. */
